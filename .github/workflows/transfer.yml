@@ -1,0 +1,50 @@
+name: Transfer
+
+on:
+  push:
+    tags:
+      - '**'
+
+jobs:
+  transfer:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Free disk space on Ubuntu runner
+        uses: kfir4444/free-disk-space@main
+        with:
+          tool-cache: false
+          android: true
+          dotnet: true
+          haskell: true
+          large-packages: true
+          swap-storage: true
+
+      - name: Check out repository code
+        uses: actions/checkout@v4
+
+      - name: Download and push Docker image
+        run: |
+          tag_name="${GITHUB_REF#refs/tags/}"
+          source_image_name="${tag_name//--/:}"
+          
+          image_name_without_registry="${source_image_name#*/}"
+          target_image_name="${{ vars.REPO_BASE }}/$image_name_without_registry"
+          
+          echo "Trying to transfer from source image '$source_image_name' to target image '$target_image_name'."
+          
+          docker login -u "${{ secrets.USERNAME }}" -p "${{ secrets.PASSWORD }}" ${{ vars.REGISTRY }}
+          
+          manifest_output=$(docker manifest inspect "$source_image_name" 2>/dev/null)
+          if [ $? -ne 0 ]; then
+            echo "Error: Failed to inspect manifest for image '$source_image_name'"
+            exit 1
+          fi
+          
+          if echo "$manifest_output" | jq -e '.manifests | length > 0' >/dev/null; then
+            echo "'$source_image_name' is a multi-platform image"
+            bash transfer.sh "$source_image_name" "$target_image_name"
+          else
+            docker pull "$source_image_name"
+            docker tag "$source_image_name" "$target_image_name"
+            docker push "$target_image_name"
+          fi
